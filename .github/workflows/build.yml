@@ -96,7 +96,7 @@ jobs:
           ditto -c -k --keepParent build/PrivilegesRearm.app build/PrivilegesRearm.zip
           shasum -a 256 build/PrivilegesRearm.zip
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: PrivilegesRearm
           path: build/PrivilegesRearm.zip
