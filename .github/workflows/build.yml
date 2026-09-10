@@ -77,6 +77,22 @@ jobs:
           codesign --verify --strict --verbose=2 build/PrivilegesRearm.app
           codesign -dvvv build/PrivilegesRearm.app 2>&1 | grep -E "Authority|TeamIdentifier|Identifier"
 
+      # A tag publishes a release, and an unnotarized release is refused by
+      # Gatekeeper on every machine that downloads it. Skipping notarization is
+      # acceptable for branch builds; for a release it must fail loudly rather
+      # than ship something broken.
+      - name: Releases must be notarizable
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          if [ "${{ steps.mode.outputs.signed }}" != "true" ]; then
+            echo "::error::Refusing to publish a release: no signing certificate available."
+            exit 1
+          fi
+          if [ "${{ steps.mode.outputs.notarize }}" != "true" ]; then
+            echo "::error::Refusing to publish a release: AC_API_KEY_BASE64 is empty or unset, so the app cannot be notarized and Gatekeeper would block it."
+            exit 1
+          fi
+
       # Only needed because a downloaded artifact is quarantined; Gatekeeper
       # will refuse to launch it otherwise.
       - name: Notarize and staple
