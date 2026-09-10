@@ -59,6 +59,30 @@ matters because macOS attributes Accessibility to the actual executable. A
 shebang script runs as `/bin/bash`, so approving it would authorize *every*
 shell script on the machine, and a script can't carry a signature anyway.
 
+## Install internals, and App Translocation
+
+Opening the app installs it. Two macOS behaviours make that less obvious than
+it sounds, and both bit us:
+
+- **App Translocation.** Launching a quarantined app from somewhere like
+  `~/Downloads` does not run it in place. macOS mounts a read-only randomized
+  copy under `/private/var/folders/.../AppTranslocation/<uuid>/d/` and runs
+  that, so `Bundle.main.bundleURL` is an ephemeral mount, not the file the user
+  can see. Trashing it fails with "the volume doesn't have one".
+  `originalPath(of:)` resolves it back via `SecTranslocateCreateOriginalPathForURL`,
+  bound with `dlsym` because those symbols are C-only in the SDK and invisible
+  to `import Security`.
+- **Ordering.** Launching the installed copy can tear down the translocated
+  mount we are executing from, which kills the process the instant it faults in
+  more code. So cleanup and all logging happen *before* the final `open`, which
+  is the last thing the installer does.
+
+Cleanup only trashes a source carrying `com.apple.quarantine`, so a locally
+built bundle is never deleted and `make install` leaves `build/` intact. It
+trashes rather than deletes, and logs the resulting Trash path, which is also
+how it gets verified: `~/.Trash` is itself protected, so the app reporting
+where it landed beats trying to read the folder.
+
 ## Signing
 
 `make` auto-detects a `Developer ID Application` identity. Override with

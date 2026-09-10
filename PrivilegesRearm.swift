@@ -17,6 +17,7 @@
 import Foundation
 import CoreGraphics
 import ApplicationServices
+import Security
 
 let appName       = "PrivilegesRearm"
 let bundleID      = "com.cammurphy.privileges-rearm"
@@ -186,6 +187,41 @@ func run(_ path: String, _ args: [String]) -> Int32 {
     return p.terminationStatus
 }
 
+/// Resolve App Translocation back to the real file on disk.
+///
+/// Launching a quarantined app from somewhere like ~/Downloads does not run it
+/// in place: macOS mounts a read-only randomized copy under AppTranslocation
+/// and runs that. Bundle.main.bundleURL then points at an ephemeral mount with
+/// no Trash, so cleaning up needs the original path instead.
+/// The SecTranslocate functions are C-only in the SDK and aren't visible to
+/// Swift through `import Security`, so bind them at runtime.
+private typealias IsTranslocatedFn =
+    @convention(c) (CFURL, UnsafeMutablePointer<DarwinBoolean>, UnsafeMutableRawPointer?) -> Bool
+private typealias OriginalPathFn =
+    @convention(c) (CFURL, UnsafeMutableRawPointer?) -> Unmanaged<CFURL>?
+
+func originalPath(of url: URL) -> URL {
+    let looksTranslocated = url.path.contains("/AppTranslocation/")
+    guard let handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY),
+          let isSym   = dlsym(handle, "SecTranslocateIsTranslocatedURL"),
+          let origSym = dlsym(handle, "SecTranslocateCreateOriginalPathForURL")
+    else {
+        if looksTranslocated { log("running translocated but SecTranslocate is unavailable") }
+        return url
+    }
+    let isTranslocated = unsafeBitCast(isSym, to: IsTranslocatedFn.self)
+    let createOriginal = unsafeBitCast(origSym, to: OriginalPathFn.self)
+
+    var flag: DarwinBoolean = false
+    guard isTranslocated(url as CFURL, &flag, nil), flag.boolValue,
+          let original = createOriginal(url as CFURL, nil)
+    else {
+        if looksTranslocated { log("could not resolve the translocated path back to the original") }
+        return url
+    }
+    return original.takeRetainedValue() as URL
+}
+
 /// True if the item carries com.apple.quarantine, i.e. it was downloaded rather
 /// than built here. Used to tell a throwaway copy from a real working one.
 func isQuarantined(_ url: URL) -> Bool {
@@ -219,14 +255,19 @@ func installSelf() -> Int32 {
     let fm   = FileManager.default
     let home = fm.homeDirectoryForCurrentUser
     let dest = home.appendingPathComponent("Applications/\(appName).app")
-    let me   = Bundle.main.bundleURL
+    // Where we are actually executing, which may be a translocated mount, and
+    // where that really lives on disk. Copy from the former (always readable);
+    // clean up the latter (the file the user can actually see).
+    let running = Bundle.main.bundleURL
+    let me = originalPath(of: running)
+    if me != running { log("running translocated; real path is \(me.path)") }
     let copied = me.standardizedFileURL != dest.standardizedFileURL
 
     if copied {
         try? fm.createDirectory(at: home.appendingPathComponent("Applications"),
                                 withIntermediateDirectories: true)
         try? fm.removeItem(at: dest)
-        do { try fm.copyItem(at: me, to: dest) }
+        do { try fm.copyItem(at: running, to: dest) }
         catch { log("could not install to \(dest.path): \(error)"); return 1 }
         log("installed to \(dest.path)")
     }
@@ -259,9 +300,12 @@ func installSelf() -> Int32 {
     // Raise the prompt from the installed copy, so what you approve is the
     // thing launchd will actually run.
     if copied {
-        run("/usr/bin/open", ["-a", dest.path, "--args", "--setup"])
-        log("finishing setup from \(dest.path)")
+        // Do everything before launching the installed copy. When we are running
+        // translocated, launching it can tear down the read-only mount we are
+        // executing from, killing this process the moment it faults in more code.
         cleanUpSource(me)
+        log("finishing setup from \(dest.path)")
+        run("/usr/bin/open", ["-a", dest.path, "--args", "--setup"])
         return 0
     }
     return requestAccessibility()
