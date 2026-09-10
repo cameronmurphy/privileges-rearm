@@ -29,8 +29,21 @@ let buttonXF: CGFloat = 0.50, buttonYF: CGFloat = 0.78
 let stateDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/privileges-rearm")
 let stateFile = stateDir.appendingPathComponent("last_state")
+let logFile   = stateDir.appendingPathComponent("rearm.log")
 
-func log(_ s: String) { print(s) }
+/// Log to stdout and to a file, because launchd discards stdout by default and
+/// a silent background failure is impossible to diagnose otherwise.
+func log(_ s: String) {
+    print(s)
+    try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+    let stamp = ISO8601DateFormatter().string(from: Date())
+    guard let d = "\(stamp)  \(s)\n".data(using: .utf8) else { return }
+    if let h = try? FileHandle(forWritingTo: logFile) {
+        h.seekToEndOfFile(); h.write(d); try? h.close()
+    } else {
+        try? d.write(to: logFile)
+    }
+}
 
 // MARK: - admin membership
 
@@ -186,5 +199,8 @@ default:
     let prev = (try? String(contentsOf: stateFile, encoding: .utf8))?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
     try? now.write(to: stateFile, atomically: true, encoding: .utf8)
-    if prev == "admin" && now == "standard" { exit(request(dry: false)) }
+    if prev == "admin" && now == "standard" {
+        log("edge detected (admin -> standard), accessibility=\(AXIsProcessTrusted())")
+        exit(request(dry: false))
+    }
 }

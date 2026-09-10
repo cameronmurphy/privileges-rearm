@@ -7,7 +7,7 @@ BIN       := $(BUILD)/$(APP_NAME)
 UID_N     := $(shell id -u)
 
 INFO_PLIST := <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleName</key><string>$(APP_NAME)</string><key>CFBundleDisplayName</key><string>$(APP_NAME)</string><key>CFBundleIdentifier</key><string>$(BUNDLE_ID)</string><key>CFBundleExecutable</key><string>$(APP_NAME)</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1.0</string><key>CFBundleShortVersionString</key><string>1.0</string><key>LSUIElement</key><true/></dict></plist>
-AGENT_PLIST := <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>$(BUNDLE_ID)</string><key>ProgramArguments</key><array><string>$(APP)/Contents/MacOS/$(APP_NAME)</string></array><key>StartInterval</key><integer>15</integer><key>RunAtLoad</key><true/><key>StandardErrorPath</key><string>/tmp/privileges-rearm.err</string></dict></plist>
+AGENT_PLIST := <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>$(BUNDLE_ID)</string><key>ProgramArguments</key><array><string>$(APP)/Contents/MacOS/$(APP_NAME)</string></array><key>StartInterval</key><integer>15</integer><key>RunAtLoad</key><true/><key>StandardOutPath</key><string>/tmp/privileges-rearm.out</string><key>StandardErrorPath</key><string>/tmp/privileges-rearm.err</string></dict></plist>
 
 .PHONY: all build install grant status uninstall clean
 
