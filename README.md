@@ -91,12 +91,73 @@ nothing is clicked, Accessibility is not approved for the app.
 
 ## Caveats
 
-- Rebuilding changes the binary's cdhash, so macOS may ask you to re-approve
-  Accessibility after `make install`.
+- With a Developer ID signature the Accessibility grant survives rebuilds,
+  because TCC keys it to the designated requirement (bundle ID + team ID)
+  rather than the binary's hash. If you fall back to ad-hoc signing, expect to
+  re-approve after every `make install`.
 - It moves the mouse pointer for about a second while it runs. It never types,
   so it cannot collide with your keyboard.
 - It fires only on the transition to standard, giving one prompt per expiry
   rather than a repeating nag.
+
+## Signing
+
+`make` auto-detects a `Developer ID Application` identity and uses it, adding
+hardened runtime and a secure timestamp. Override with `make app SIGN_ID="..."`,
+or `SIGN_ID=-` for ad-hoc. Check what it picked with `make sign-info`.
+
+This matters for more than tidiness. A Developer ID signature gives the bundle a
+designated requirement of bundle ID plus team ID, which is what TCC records, so
+the Accessibility approval keeps working across rebuilds.
+
+Notarization is only needed if the app will be *downloaded*, since a download is
+quarantined and Gatekeeper refuses unnotarized apps. A locally built app is not
+quarantined and runs fine without it.
+
+```sh
+xcrun notarytool store-credentials privileges-rearm   # once
+make notarize
+```
+
+## CI
+
+`.github/workflows/build.yml` builds on `macos-latest`, imports the certificate
+into a temporary keychain, signs, verifies, and uploads the app as an artifact.
+Tagged pushes (`v*`) additionally notarize, staple, and attach to a release.
+Without secrets, for example on a fork PR, it degrades to an unsigned compile
+check instead of failing.
+
+CI cannot test behaviour. The tool drives another app's GUI, needs Accessibility,
+and ends at a fingerprint sensor, none of which exist on a runner.
+
+Required secrets:
+
+| Secret | What it is |
+| --- | --- |
+| `CERT_P12_BASE64` | Developer ID cert + private key, exported as `.p12`, base64, unwrapped |
+| `CERT_P12_PASSWORD` | password used for that `.p12` export |
+| `KEYCHAIN_PASSWORD` | any string; for the throwaway CI keychain |
+| `SIGN_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
+
+Only for notarized tag builds:
+
+| Secret | What it is |
+| --- | --- |
+| `AC_API_KEY_BASE64` | App Store Connect API key `.p8`, base64, unwrapped |
+| `AC_API_KEY_ID` | the key ID |
+| `AC_API_ISSUER_ID` | the issuer ID |
+
+Export the certificate from Keychain Access (right-click the identity, Export,
+choose `.p12`), then:
+
+```sh
+base64 -i Certificates.p12 | tr -d '\n' | gh secret set CERT_P12_BASE64
+gh secret set CERT_P12_PASSWORD
+gh secret set KEYCHAIN_PASSWORD
+gh secret set SIGN_IDENTITY --body "Developer ID Application: Name (TEAMID)"
+```
+
+Delete the exported `.p12` afterwards; it contains your private key.
 
 ## Uninstall
 

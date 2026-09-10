@@ -1,17 +1,38 @@
 APP_NAME  := PrivilegesRearm
 BUNDLE_ID := com.cammurphy.privileges-rearm
-APP       := $(HOME)/Applications/$(APP_NAME).app
-PLIST     := $(HOME)/Library/LaunchAgents/$(BUNDLE_ID).plist
 BUILD     := build
 BIN       := $(BUILD)/$(APP_NAME)
+APP_BUILT := $(BUILD)/$(APP_NAME).app
+APP       := $(HOME)/Applications/$(APP_NAME).app
+PLIST     := $(HOME)/Library/LaunchAgents/$(BUNDLE_ID).plist
 UID_N     := $(shell id -u)
+NOTARY_PROFILE ?= privileges-rearm
+
+# Prefer a Developer ID identity. TCC keys a Developer ID app's Accessibility
+# grant to the signing identity, so it survives rebuilds; an ad-hoc signature
+# is keyed to the cdhash and every rebuild forces re-approval.
+SIGN_ID ?= $(shell security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Developer ID Application/{print $$2; exit}')
+ifeq ($(strip $(SIGN_ID)),)
+SIGN_ID := -
+endif
+
+# Hardened runtime + secure timestamp are required for notarization, but are
+# not valid for ad-hoc signing.
+ifeq ($(SIGN_ID),-)
+CODESIGN_EXTRA :=
+else
+CODESIGN_EXTRA := --options runtime --timestamp
+endif
 
 INFO_PLIST := <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleName</key><string>$(APP_NAME)</string><key>CFBundleDisplayName</key><string>$(APP_NAME)</string><key>CFBundleIdentifier</key><string>$(BUNDLE_ID)</string><key>CFBundleExecutable</key><string>$(APP_NAME)</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1.0</string><key>CFBundleShortVersionString</key><string>1.0</string><key>LSUIElement</key><true/></dict></plist>
 AGENT_PLIST := <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>$(BUNDLE_ID)</string><key>ProgramArguments</key><array><string>$(APP)/Contents/MacOS/$(APP_NAME)</string></array><key>StartInterval</key><integer>15</integer><key>RunAtLoad</key><true/><key>StandardOutPath</key><string>/tmp/privileges-rearm.out</string><key>StandardErrorPath</key><string>/tmp/privileges-rearm.err</string></dict></plist>
 
-.PHONY: all build install grant status uninstall clean
+.PHONY: all build app sign-info install grant status uninstall notarize clean
 
-all: build
+all: app
+
+sign-info:
+	@echo "signing identity: $(SIGN_ID)"
 
 build: $(BIN)
 
@@ -20,17 +41,32 @@ $(BIN): $(APP_NAME).swift
 	swiftc -O -o $(BIN) $(APP_NAME).swift -framework CoreGraphics -framework ApplicationServices
 	@echo "built $(BIN)"
 
-## Assemble the signed .app, install it, and load the LaunchAgent.
-## Rebuilding changes the binary's cdhash, so macOS may ask you to
-## re-approve Accessibility afterwards.
-install: build
+## Assemble and sign the bundle under build/. Does not touch ~/Applications,
+## so CI can run this on a machine that has no Privileges.app.
+app: build
+	@rm -rf "$(APP_BUILT)"
+	@mkdir -p "$(APP_BUILT)/Contents/MacOS"
+	@cp $(BIN) "$(APP_BUILT)/Contents/MacOS/$(APP_NAME)"
+	@chmod +x "$(APP_BUILT)/Contents/MacOS/$(APP_NAME)"
+	@printf '%s' '$(INFO_PLIST)' > "$(APP_BUILT)/Contents/Info.plist"
+	@plutil -lint "$(APP_BUILT)/Contents/Info.plist" >/dev/null
+	codesign --force --sign "$(SIGN_ID)" $(CODESIGN_EXTRA) "$(APP_BUILT)"
+	@codesign -dv "$(APP_BUILT)" 2>&1 | grep -E "Identifier|Authority|Signature" || true
+	@echo "assembled $(APP_BUILT)"
+
+## Zip, submit to Apple, staple the ticket. Only needed if the app will be
+## downloaded (a download gets quarantined; a local build does not).
+## Set up once with: xcrun notarytool store-credentials $(NOTARY_PROFILE)
+notarize: app
+	@ditto -c -k --keepParent "$(APP_BUILT)" "$(BUILD)/$(APP_NAME).zip"
+	xcrun notarytool submit "$(BUILD)/$(APP_NAME).zip" --keychain-profile "$(NOTARY_PROFILE)" --wait
+	xcrun stapler staple "$(APP_BUILT)"
+	@echo "notarized and stapled"
+
+install: app
 	@rm -rf "$(APP)"
-	@mkdir -p "$(APP)/Contents/MacOS"
-	@cp $(BIN) "$(APP)/Contents/MacOS/$(APP_NAME)"
-	@chmod +x "$(APP)/Contents/MacOS/$(APP_NAME)"
-	@printf '%s' '$(INFO_PLIST)' > "$(APP)/Contents/Info.plist"
-	@plutil -lint "$(APP)/Contents/Info.plist" >/dev/null
-	@codesign --force --sign - "$(APP)"
+	@mkdir -p "$(HOME)/Applications"
+	@cp -R "$(APP_BUILT)" "$(APP)"
 	@mkdir -p "$(HOME)/Library/LaunchAgents"
 	@printf '%s' '$(AGENT_PLIST)' > "$(PLIST)"
 	@plutil -lint "$(PLIST)" >/dev/null
@@ -39,8 +75,8 @@ install: build
 	@echo "installed $(APP), LaunchAgent loaded (15s interval)"
 	@echo "if Accessibility is not approved yet, run: make grant"
 
-## Launch the app standalone so it raises the Accessibility prompt in its
-## own name (running it from a terminal would inherit the terminal's grant).
+## Launch standalone so the prompt is raised in the app's own name. Running it
+## from a terminal would inherit the terminal's grant and report a false pass.
 grant:
 	@open -a "$(APP)" --args --setup
 	@echo "approve $(APP_NAME) in System Settings > Privacy & Security > Accessibility"
@@ -48,6 +84,7 @@ grant:
 status:
 	@"$(APP)/Contents/MacOS/$(APP_NAME)" --status 2>/dev/null || echo "app not installed"
 	@launchctl print gui/$(UID_N)/$(BUNDLE_ID) 2>/dev/null | grep -E "state =|program =" | head -2 || echo "agent not loaded"
+	@tail -5 "$(HOME)/Library/Application Support/privileges-rearm/rearm.log" 2>/dev/null || true
 
 uninstall:
 	@launchctl bootout gui/$(UID_N) "$(PLIST)" 2>/dev/null || true
