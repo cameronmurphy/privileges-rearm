@@ -15,7 +15,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # No secrets on pull requests from forks, so fall back to an unsigned
       # compile check rather than failing the job.
@@ -96,7 +96,7 @@ jobs:
           ditto -c -k --keepParent build/PrivilegesRearm.app build/PrivilegesRearm.zip
           shasum -a 256 build/PrivilegesRearm.zip
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: PrivilegesRearm
           path: build/PrivilegesRearm.zip
