@@ -18,6 +18,8 @@ import Foundation
 import CoreGraphics
 import ApplicationServices
 
+let appName       = "PrivilegesRearm"
+let bundleID      = "com.cammurphy.privileges-rearm"
 let targetReason  = "Developer Requirement"
 let privilegesApp = "/Applications/Privileges.app"
 let profilePath   = "/Library/Managed Preferences/corp.sap.privileges.plist"
@@ -170,6 +172,97 @@ func request(dry: Bool) -> Int32 {
     return 0
 }
 
+// MARK: - self install
+
+@discardableResult
+func run(_ path: String, _ args: [String]) -> Int32 {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: path)
+    p.arguments = args
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError  = FileHandle.nullDevice
+    do { try p.run() } catch { return -1 }
+    p.waitUntilExit()
+    return p.terminationStatus
+}
+
+/// Copy ourselves to ~/Applications, write and load the LaunchAgent, then ask
+/// for Accessibility. This is what happens when the app is simply opened, so
+/// installing needs no Makefile, no Xcode, and no terminal.
+func installSelf() -> Int32 {
+    let fm   = FileManager.default
+    let home = fm.homeDirectoryForCurrentUser
+    let dest = home.appendingPathComponent("Applications/\(appName).app")
+    let me   = Bundle.main.bundleURL
+    let copied = me.standardizedFileURL != dest.standardizedFileURL
+
+    if copied {
+        try? fm.createDirectory(at: home.appendingPathComponent("Applications"),
+                                withIntermediateDirectories: true)
+        try? fm.removeItem(at: dest)
+        do { try fm.copyItem(at: me, to: dest) }
+        catch { log("could not install to \(dest.path): \(error)"); return 1 }
+        log("installed to \(dest.path)")
+    }
+
+    let exe = dest.appendingPathComponent("Contents/MacOS/\(appName)").path
+    let agentPlist: [String: Any] = [
+        "Label": bundleID,
+        "ProgramArguments": [exe, "--watch"],
+        "StartInterval": 15,
+        "RunAtLoad": true,
+        "StandardOutPath": "/tmp/privileges-rearm.out",
+        "StandardErrorPath": "/tmp/privileges-rearm.err",
+    ]
+    let agentsDir = home.appendingPathComponent("Library/LaunchAgents")
+    try? fm.createDirectory(at: agentsDir, withIntermediateDirectories: true)
+    let plistURL = agentsDir.appendingPathComponent("\(bundleID).plist")
+    guard let data = try? PropertyListSerialization.data(
+        fromPropertyList: agentPlist, format: .xml, options: 0) else {
+        log("could not build the LaunchAgent plist"); return 1
+    }
+    do { try data.write(to: plistURL) }
+    catch { log("could not write \(plistURL.path): \(error)"); return 1 }
+
+    let uid = getuid()
+    run("/bin/launchctl", ["bootout", "gui/\(uid)", plistURL.path])
+    let rc = run("/bin/launchctl", ["bootstrap", "gui/\(uid)", plistURL.path])
+    log(rc == 0 ? "LaunchAgent loaded, checking every 15s"
+                : "launchctl bootstrap failed (\(rc))")
+
+    // Raise the prompt from the installed copy, so what you approve is the
+    // thing launchd will actually run.
+    if copied {
+        run("/usr/bin/open", ["-a", dest.path, "--args", "--setup"])
+        log("finishing setup from \(dest.path)")
+        return 0
+    }
+    return requestAccessibility()
+}
+
+func requestAccessibility() -> Int32 {
+    let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    if AXIsProcessTrustedWithOptions(opts) {
+        log("Accessibility already granted — setup complete")
+    } else {
+        log("approve \(appName) in System Settings > Privacy & Security > Accessibility")
+    }
+    return 0
+}
+
+// MARK: - edge detection
+
+func edgeDetect() {
+    let now  = isAdmin() ? "admin" : "standard"
+    let prev = (try? String(contentsOf: stateFile, encoding: .utf8))?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
+    try? now.write(to: stateFile, atomically: true, encoding: .utf8)
+    if prev == "admin" && now == "standard" {
+        log("edge detected (admin -> standard), accessibility=\(AXIsProcessTrusted())")
+        exit(request(dry: false))
+    }
+}
+
 // MARK: - main
 
 try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
@@ -177,12 +270,7 @@ try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectori
 switch CommandLine.arguments.dropFirst().first {
 
 case "--setup":
-    let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-    if AXIsProcessTrustedWithOptions(opts) {
-        log("Accessibility already granted")
-    } else {
-        log("Approve PrivilegesRearm in the dialog, or in System Settings > Privacy & Security > Accessibility")
-    }
+    exit(requestAccessibility())
 
 case "--status":
     log("admin: \(isAdmin())   accessibility: \(AXIsProcessTrusted())")
@@ -193,14 +281,15 @@ case "--now":
 case "--dry":
     exit(request(dry: true))
 
-default:
-    // Fire only on the admin -> standard edge: the moment access is lost.
-    let now  = isAdmin() ? "admin" : "standard"
-    let prev = (try? String(contentsOf: stateFile, encoding: .utf8))?
-        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
-    try? now.write(to: stateFile, atomically: true, encoding: .utf8)
-    if prev == "admin" && now == "standard" {
-        log("edge detected (admin -> standard), accessibility=\(AXIsProcessTrusted())")
-        exit(request(dry: false))
-    }
+case "--watch":
+    // What the LaunchAgent runs: fire only on the admin -> standard edge.
+    edgeDetect()
+
+case nil, "--install":
+    // Opening the app (double-click, or `open -a`) installs it.
+    exit(installSelf())
+
+case .some(let other):
+    log("unknown option: \(other)")
+    exit(64)
 }

@@ -63,20 +63,13 @@ notarize: app
 	xcrun stapler staple "$(APP_BUILT)"
 	@echo "notarized and stapled"
 
+## The app installs itself: it copies to ~/Applications, writes and loads the
+## LaunchAgent, and raises the Accessibility prompt from the installed copy.
+## Equivalent to just double-clicking the .app.
 install: app
-	@rm -rf "$(APP)"
-	@mkdir -p "$(HOME)/Applications"
-	@cp -R "$(APP_BUILT)" "$(APP)"
-	@mkdir -p "$(HOME)/Library/LaunchAgents"
-	@printf '%s' '$(AGENT_PLIST)' > "$(PLIST)"
-	@plutil -lint "$(PLIST)" >/dev/null
-	@launchctl bootout gui/$(UID_N) "$(PLIST)" 2>/dev/null || true
-	@launchctl bootstrap gui/$(UID_N) "$(PLIST)"
-	@echo "installed $(APP), LaunchAgent loaded (15s interval)"
-	@echo "if Accessibility is not approved yet, run: make grant"
+	@"$(APP_BUILT)/Contents/MacOS/$(APP_NAME)" --install
 
-## Launch standalone so the prompt is raised in the app's own name. Running it
-## from a terminal would inherit the terminal's grant and report a false pass.
+## Only needed to re-raise the Accessibility prompt on an already-installed app.
 grant:
 	@open -a "$(APP)" --args --setup
 	@echo "approve $(APP_NAME) in System Settings > Privacy & Security > Accessibility"
