@@ -86,7 +86,8 @@ CI can't test behaviour: no GUI to drive, no Accessibility, no Touch ID sensor.
 | `SIGN_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
 
 Notarized tag builds also need `AC_API_KEY_BASE64` (App Store Connect `.p8`,
-base64, unwrapped), `AC_API_KEY_ID`, and `AC_API_ISSUER_ID`.
+base64, unwrapped), `AC_API_KEY_ID`, and `AC_API_ISSUER_ID`. Without them a
+`v*` tag still builds and signs, it just skips notarization rather than failing.
 
 The repo must exist before secrets can be set, since `gh secret set` resolves
 the target from the git remote. Export the identity from Keychain Access
