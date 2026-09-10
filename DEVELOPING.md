@@ -21,11 +21,27 @@ Accessibility prompt from the installed copy.
 | Command | Effect |
 | --- | --- |
 | (no args) / `--install` | Install: copy to `~/Applications`, load the agent, request Accessibility. |
-| `--watch` | Edge detect. Requests only on the admin to standard transition. What the LaunchAgent runs. |
+| `--watch` | Edge detect plus bounded retries. What the LaunchAgent runs. |
 | `--now` | Run the request immediately. |
 | `--dry` | Select the reason but do not submit. Safe to repeat. |
 | `--setup` | Ask macOS for Accessibility permission. |
 | `--status` | Print admin and Accessibility state. |
+| `--selftest` | Exercise the retry decision table. No side effects. |
+
+## Retries
+
+The trigger is the admin-to-standard edge, so it prompts once per expiry and
+never nags. That alone was a trap: cancelling the Touch ID prompt leaves you
+standard, which is indistinguishable from "already handled", so nothing tried
+again until the next expiry.
+
+So a failed attempt now gets two spaced retries, at 2 and 10 minutes, then
+silence until you are admin again, which resets the counter. A retry is skipped
+if a Privileges dialog is already on screen, rather than stacking another.
+
+`decide(admin:prev:now:)` is pure and covered by `--selftest`, because the
+alternative is fabricating admin state to test it, and the real environment
+short-circuits before the retry logic is ever reached.
 
 ## Versioning
 

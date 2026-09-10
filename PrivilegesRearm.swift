@@ -143,13 +143,14 @@ func request(dry: Bool) -> Int32 {
         return 2
     }
 
-    let op = Process()
-    op.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    op.arguments = ["-a", privilegesApp]
-    try? op.run()
-    op.waitUntilExit()
-
-    guard let d = waitFor(dialogBounds, timeout: 8) else {
+    // Reuse a dialog that is already on screen rather than stacking another.
+    var found = dialogBounds()
+    if found == nil {
+        run("/usr/bin/open", ["-a", privilegesApp])
+        // Privileges can be slow to draw; 8s proved too short in practice.
+        found = waitFor(dialogBounds, timeout: 20)
+    }
+    guard let d = found else {
         log("request dialog did not appear"); return 1
     }
 
@@ -323,15 +324,103 @@ func requestAccessibility() -> Int32 {
 
 // MARK: - edge detection
 
+/// Gap before retry 2 and retry 3. A cancelled or failed prompt should not
+/// strand you until the next expiry, but it must not nag either, so there are
+/// a couple of spaced retries and then silence until you are admin again.
+let retryDelays: [TimeInterval] = [120, 600]
+
+private struct Watch {
+    var state: String = "unknown"
+    var attempts: Int = 0
+    var lastAttempt: TimeInterval = 0
+}
+
+private func readWatch() -> Watch {
+    guard let raw = try? String(contentsOf: stateFile, encoding: .utf8) else { return Watch() }
+    let f = raw.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
+    guard let state = f.first.map(String.init) else { return Watch() }
+    // Tolerate the older format, which held only the state.
+    return Watch(state: state,
+                 attempts: f.count > 1 ? Int(f[1]) ?? 0 : 0,
+                 lastAttempt: f.count > 2 ? Double(f[2]) ?? 0 : 0)
+}
+
+private func writeWatch(_ w: Watch) {
+    try? "\(w.state) \(w.attempts) \(Int(w.lastAttempt))"
+        .write(to: stateFile, atomically: true, encoding: .utf8)
+}
+
+private enum WatchAction: Equatable {
+    case recordAdmin          // back to admin: reset, next expiry starts fresh
+    case fireEdge             // admin -> standard: the moment access was lost
+    case fireRetry(Int)       // an earlier attempt did not take
+    case wait                 // nothing to do
+}
+
+/// Pure so it can be exercised by --selftest without touching real state.
+private func decide(admin: Bool, prev: Watch, now: TimeInterval) -> WatchAction {
+    if admin { return .recordAdmin }
+    if prev.state == "admin" { return .fireEdge }
+    guard prev.attempts > 0, prev.attempts <= retryDelays.count else { return .wait }
+    let due = prev.lastAttempt + retryDelays[prev.attempts - 1]
+    return now >= due ? .fireRetry(prev.attempts + 1) : .wait
+}
+
 func edgeDetect() {
-    let now  = isAdmin() ? "admin" : "standard"
-    let prev = (try? String(contentsOf: stateFile, encoding: .utf8))?
-        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
-    try? now.write(to: stateFile, atomically: true, encoding: .utf8)
-    if prev == "admin" && now == "standard" {
+    let prev = readWatch()
+    let now = Date().timeIntervalSince1970
+
+    switch decide(admin: isAdmin(), prev: prev, now: now) {
+    case .recordAdmin:
+        writeWatch(Watch(state: "admin", attempts: 0, lastAttempt: 0))
+
+    case .fireEdge:
         log("edge detected (admin -> standard), accessibility=\(AXIsProcessTrusted())")
+        writeWatch(Watch(state: "standard", attempts: 1, lastAttempt: now))
         exit(request(dry: false))
+
+    case .fireRetry(let n):
+        // Something is already on screen; leave it rather than stacking dialogs.
+        if dialogBounds() != nil {
+            writeWatch(prev)
+            return
+        }
+        log("retry \(n) of \(retryDelays.count + 1); the previous request did not complete")
+        writeWatch(Watch(state: "standard", attempts: n, lastAttempt: now))
+        exit(request(dry: false))
+
+    case .wait:
+        writeWatch(Watch(state: "standard", attempts: prev.attempts, lastAttempt: prev.lastAttempt))
     }
+}
+
+/// Exercise the decision table. No side effects, safe to run any time.
+func selfTest() -> Int32 {
+    let t: TimeInterval = 1_000_000
+    var failures = 0
+    func check(_ name: String, _ got: WatchAction, _ want: WatchAction) {
+        let ok = got == want
+        if !ok { failures += 1 }
+        print("  \(ok ? "pass" : "FAIL")  \(name): got \(got), want \(want)")
+    }
+    check("admin resets",
+          decide(admin: true, prev: Watch(state: "standard", attempts: 2, lastAttempt: t), now: t), .recordAdmin)
+    check("admin -> standard fires",
+          decide(admin: false, prev: Watch(state: "admin"), now: t), .fireEdge)
+    check("first run, no history, stays quiet",
+          decide(admin: false, prev: Watch(), now: t), .wait)
+    check("retry not yet due",
+          decide(admin: false, prev: Watch(state: "standard", attempts: 1, lastAttempt: t), now: t + 5), .wait)
+    check("retry 2 due after 120s",
+          decide(admin: false, prev: Watch(state: "standard", attempts: 1, lastAttempt: t), now: t + 121), .fireRetry(2))
+    check("retry 3 not due at 121s",
+          decide(admin: false, prev: Watch(state: "standard", attempts: 2, lastAttempt: t), now: t + 121), .wait)
+    check("retry 3 due after 600s",
+          decide(admin: false, prev: Watch(state: "standard", attempts: 2, lastAttempt: t), now: t + 601), .fireRetry(3))
+    check("attempts exhausted, silent forever",
+          decide(admin: false, prev: Watch(state: "standard", attempts: 3, lastAttempt: t), now: t + 99999), .wait)
+    print(failures == 0 ? "  all passed" : "  \(failures) FAILED")
+    return failures == 0 ? 0 : 1
 }
 
 // MARK: - main
@@ -342,6 +431,9 @@ switch CommandLine.arguments.dropFirst().first {
 
 case "--setup":
     exit(requestAccessibility())
+
+case "--selftest":
+    exit(selfTest())
 
 case "--status":
     log("admin: \(isAdmin())   accessibility: \(AXIsProcessTrusted())")
