@@ -1,0 +1,10 @@
+version: 2
+
+updates:
+  # Workflow actions only. The app is a single Swift file compiled with swiftc
+  # against system frameworks, so there is no package manifest to track.
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 20
