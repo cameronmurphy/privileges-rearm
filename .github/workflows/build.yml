@@ -15,7 +15,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # No secrets on pull requests from forks, so fall back to an unsigned
       # compile check rather than failing the job.
