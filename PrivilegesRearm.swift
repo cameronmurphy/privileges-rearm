@@ -50,6 +50,13 @@ func log(_ s: String) {
 
 // MARK: - admin membership
 
+/// True while the login window covers the session. A prompt raised now cannot
+/// be answered, so an attempt spent here is wasted.
+func screenLocked() -> Bool {
+    let d = CGSessionCopyCurrentDictionary() as? [String: Any]
+    return d?["CGSSessionScreenIsLocked"] as? Bool ?? false
+}
+
 func isAdmin() -> Bool {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/sbin/dseditgroup")
@@ -354,12 +361,16 @@ private enum WatchAction: Equatable {
     case recordAdmin          // back to admin: reset, next expiry starts fresh
     case fireEdge             // admin -> standard: the moment access was lost
     case fireRetry(Int)       // an earlier attempt did not take
+    case hold                 // screen locked: nobody can answer, keep state as is
     case wait                 // nothing to do
 }
 
 /// Pure so it can be exercised by --selftest without touching real state.
-private func decide(admin: Bool, prev: Watch, now: TimeInterval) -> WatchAction {
+private func decide(admin: Bool, locked: Bool = false, prev: Watch, now: TimeInterval) -> WatchAction {
     if admin { return .recordAdmin }
+    // Firing at a locked screen burns the whole ladder on prompts nobody sees,
+    // so the edge stays pending and goes off once the screen is back.
+    if locked { return .hold }
     if prev.state == "admin" { return .fireEdge }
     guard prev.attempts > 0, prev.attempts <= retryDelays.count else { return .wait }
     let due = prev.lastAttempt + retryDelays[prev.attempts - 1]
@@ -370,7 +381,7 @@ func edgeDetect() {
     let prev = readWatch()
     let now = Date().timeIntervalSince1970
 
-    switch decide(admin: isAdmin(), prev: prev, now: now) {
+    switch decide(admin: isAdmin(), locked: screenLocked(), prev: prev, now: now) {
     case .recordAdmin:
         writeWatch(Watch(state: "admin", attempts: 0, lastAttempt: 0))
 
@@ -388,6 +399,9 @@ func edgeDetect() {
         log("retry \(n) of \(retryDelays.count + 1); the previous request did not complete")
         writeWatch(Watch(state: "standard", attempts: n, lastAttempt: now))
         exit(request(dry: false))
+
+    case .hold:
+        writeWatch(prev)
 
     case .wait:
         writeWatch(Watch(state: "standard", attempts: prev.attempts, lastAttempt: prev.lastAttempt))
@@ -419,6 +433,16 @@ func selfTest() -> Int32 {
           decide(admin: false, prev: Watch(state: "standard", attempts: 2, lastAttempt: t), now: t + 601), .fireRetry(3))
     check("attempts exhausted, silent forever",
           decide(admin: false, prev: Watch(state: "standard", attempts: 3, lastAttempt: t), now: t + 99999), .wait)
+    check("locked screen holds the edge instead of spending it",
+          decide(admin: false, locked: true, prev: Watch(state: "admin"), now: t), .hold)
+    check("locked screen holds a due retry",
+          decide(admin: false, locked: true, prev: Watch(state: "standard", attempts: 1, lastAttempt: t), now: t + 121), .hold)
+    check("edge still fires once unlocked",
+          decide(admin: false, locked: false, prev: Watch(state: "admin"), now: t + 99999), .fireEdge)
+    check("retry overdue while locked fires on unlock",
+          decide(admin: false, locked: false, prev: Watch(state: "standard", attempts: 1, lastAttempt: t), now: t + 99999), .fireRetry(2))
+    check("admin still resets while locked",
+          decide(admin: true, locked: true, prev: Watch(state: "standard", attempts: 2, lastAttempt: t), now: t), .recordAdmin)
     print(failures == 0 ? "  all passed" : "  \(failures) FAILED")
     return failures == 0 ? 0 : 1
 }

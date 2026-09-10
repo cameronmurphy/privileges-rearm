@@ -39,8 +39,16 @@ So a failed attempt now gets two spaced retries, at 2 and 10 minutes, then
 silence until you are admin again, which resets the counter. A retry is skipped
 if a Privileges dialog is already on screen, rather than stacking another.
 
-`decide(admin:prev:now:)` is pure and covered by `--selftest`, because the
-alternative is fabricating admin state to test it, and the real environment
+Nothing fires while the screen is locked. Expiry usually happens while you are
+away, and a prompt raised at the login window cannot be answered, so the ladder
+would spend all three attempts on dialogs nobody sees and be exhausted before
+you sat down. Locked ticks hold the state untouched instead, which leaves the
+edge pending so it fires on the first tick after you unlock, when you are there
+and the sensor is already under your finger. The delays are unchanged: they now
+only elapse between prompts you could actually have answered.
+
+`decide(admin:locked:prev:now:)` is pure and covered by `--selftest`, because
+the alternative is fabricating admin state to test it, and the real environment
 short-circuits before the retry logic is ever reached.
 
 ## Versioning
