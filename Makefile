@@ -1,5 +1,5 @@
 APP_NAME  := PrivilegesRearm
-BUNDLE_ID := com.cammurphy.privileges-rearm
+BUNDLE_ID := com.camurphy.privileges-rearm
 BUILD     := build
 BIN       := $(BUILD)/$(APP_NAME)
 APP_BUILT := $(BUILD)/$(APP_NAME).app

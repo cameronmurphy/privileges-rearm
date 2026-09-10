@@ -37,8 +37,8 @@ tail ~/Library/Application\ Support/privileges-rearm/rearm.log
 ## Uninstall
 
 ```sh
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.cammurphy.privileges-rearm.plist
-rm -f ~/Library/LaunchAgents/com.cammurphy.privileges-rearm.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.camurphy.privileges-rearm.plist
+rm -f ~/Library/LaunchAgents/com.camurphy.privileges-rearm.plist
 rm -rf ~/Applications/PrivilegesRearm.app
 ```
 

@@ -20,7 +20,7 @@ import ApplicationServices
 import Security
 
 let appName       = "PrivilegesRearm"
-let bundleID      = "com.cammurphy.privileges-rearm"
+let bundleID      = "com.camurphy.privileges-rearm"
 let targetReason  = "Developer Requirement"
 let privilegesApp = "/Applications/Privileges.app"
 let profilePath   = "/Library/Managed Preferences/corp.sap.privileges.plist"
