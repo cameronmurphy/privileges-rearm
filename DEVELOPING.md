@@ -27,6 +27,16 @@ Accessibility prompt from the installed copy.
 | `--setup` | Ask macOS for Accessibility permission. |
 | `--status` | Print admin and Accessibility state. |
 
+## Versioning
+
+`CFBundleShortVersionString` comes from the latest git tag (`v0.0.1` becomes
+`0.0.1`, falling back to `0.0.0` when untagged). `CFBundleVersion` is the commit
+count, which is numeric and monotonic as that key requires. Nothing is
+hardcoded, so a tagged build can't ship claiming the wrong version.
+
+CI checks out with `fetch-depth: 0` because the default shallow clone has no
+tags and no history to count.
+
 ## How it drives the dialog
 
 The Privileges request dialog opts out of Accessibility, so its controls can't

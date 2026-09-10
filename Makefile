@@ -8,6 +8,15 @@ PLIST     := $(HOME)/Library/LaunchAgents/$(BUNDLE_ID).plist
 UID_N     := $(shell id -u)
 NOTARY_PROFILE ?= privileges-rearm
 
+# Marketing version comes from the latest tag (v0.0.1 -> 0.0.1); build number is
+# the commit count, which is monotonic and numeric as CFBundleVersion wants.
+# CI must check out with fetch-depth: 0 or neither is visible.
+SHORT_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+ifeq ($(strip $(SHORT_VERSION)),)
+SHORT_VERSION := 0.0.0
+endif
+BUILD_VERSION ?= $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+
 # Prefer a Developer ID identity. TCC keys a Developer ID app's Accessibility
 # grant to the signing identity, so it survives rebuilds; an ad-hoc signature
 # is keyed to the cdhash and every rebuild forces re-approval.
@@ -24,7 +33,7 @@ else
 CODESIGN_EXTRA := --options runtime --timestamp
 endif
 
-INFO_PLIST := <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleName</key><string>$(APP_NAME)</string><key>CFBundleDisplayName</key><string>$(APP_NAME)</string><key>CFBundleIdentifier</key><string>$(BUNDLE_ID)</string><key>CFBundleExecutable</key><string>$(APP_NAME)</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1.0</string><key>CFBundleShortVersionString</key><string>1.0</string><key>LSUIElement</key><true/></dict></plist>
+INFO_PLIST := <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleName</key><string>$(APP_NAME)</string><key>CFBundleDisplayName</key><string>$(APP_NAME)</string><key>CFBundleIdentifier</key><string>$(BUNDLE_ID)</string><key>CFBundleExecutable</key><string>$(APP_NAME)</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>$(BUILD_VERSION)</string><key>CFBundleShortVersionString</key><string>$(SHORT_VERSION)</string><key>LSUIElement</key><true/></dict></plist>
 AGENT_PLIST := <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>$(BUNDLE_ID)</string><key>ProgramArguments</key><array><string>$(APP)/Contents/MacOS/$(APP_NAME)</string></array><key>StartInterval</key><integer>15</integer><key>RunAtLoad</key><true/><key>StandardOutPath</key><string>/tmp/privileges-rearm.out</string><key>StandardErrorPath</key><string>/tmp/privileges-rearm.err</string></dict></plist>
 
 .PHONY: all build app sign-info install grant status uninstall notarize clean
@@ -33,6 +42,7 @@ all: app
 
 sign-info:
 	@echo "signing identity: $(SIGN_ID)"
+	@echo "version: $(SHORT_VERSION) (build $(BUILD_VERSION))"
 
 build: $(BIN)
 

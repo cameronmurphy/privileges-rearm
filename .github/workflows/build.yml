@@ -16,6 +16,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Tags and full history: the bundle version is derived from them.
+          fetch-depth: 0
 
       # No secrets on pull requests from forks, so fall back to an unsigned
       # compile check rather than failing the job.
