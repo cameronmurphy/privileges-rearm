@@ -186,6 +186,32 @@ func run(_ path: String, _ args: [String]) -> Int32 {
     return p.terminationStatus
 }
 
+/// True if the item carries com.apple.quarantine, i.e. it was downloaded rather
+/// than built here. Used to tell a throwaway copy from a real working one.
+func isQuarantined(_ url: URL) -> Bool {
+    getxattr(url.path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW) >= 0
+}
+
+/// Trash the copy the user launched, once it has been installed elsewhere.
+/// Only for downloaded copies: a locally built bundle has no quarantine flag,
+/// so `make install` never deletes your build output. Trash rather than delete,
+/// so it is recoverable. Moving the bundle is safe while running from it; the
+/// process keeps its already-open executable.
+func cleanUpSource(_ source: URL) {
+    guard isQuarantined(source) else {
+        log("left \(source.path) alone (not a downloaded copy)")
+        return
+    }
+    var resulting: NSURL?
+    do {
+        try FileManager.default.trashItem(at: source, resultingItemURL: &resulting)
+        let landed = (resulting as URL?)?.path ?? "the Trash"
+        log("moved the downloaded copy to the Trash: \(source.path) -> \(landed)")
+    } catch {
+        log("could not trash \(source.path): \(error)")
+    }
+}
+
 /// Copy ourselves to ~/Applications, write and load the LaunchAgent, then ask
 /// for Accessibility. This is what happens when the app is simply opened, so
 /// installing needs no Makefile, no Xcode, and no terminal.
@@ -235,6 +261,7 @@ func installSelf() -> Int32 {
     if copied {
         run("/usr/bin/open", ["-a", dest.path, "--args", "--setup"])
         log("finishing setup from \(dest.path)")
+        cleanUpSource(me)
         return 0
     }
     return requestAccessibility()
